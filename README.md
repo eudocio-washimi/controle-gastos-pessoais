@@ -58,6 +58,7 @@ O mesmo frontend roda como app nativo via [Capacitor](https://capacitorjs.com) (
    ```bash
    npm run android:apk
    ```
+   Sem Android Studio e sem permissão de administrador: baixe o JDK 21 (zip da Adoptium) e as *command-line tools* do Android, descompacte numa pasta do usuário, instale com `sdkmanager platform-tools "platforms;android-36" "build-tools;36.0.0"`, crie `android/local.properties` com `sdk.dir=C\:/caminho/do/sdk` (barras normais) e rode `gradlew.bat assembleDebug` com `JAVA_HOME` apontando para o JDK.
 4. No app, vá em **Configurações**, informe o **Client ID** e o **Client Secret** do Pluggy e adicione os IDs dos items. Sem isso o app abre no modo demonstração.
 
 Diferenças em relação à versão web:
