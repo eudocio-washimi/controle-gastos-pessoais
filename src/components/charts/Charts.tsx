@@ -314,18 +314,27 @@ export function Waterfall({ steps }: { steps: WaterfallStep[] }) {
 
 // 8. Projeção — saídas empilhadas por mês (mesmo eixo em R$) com a receita como linha de referência
 export function ProjectionBars({
-  data, series, incomeLabel,
+  data, series, incomeLabel, selected, onSelect,
 }: {
   data: Record<string, number | string>[];
   series: { key: string; label: string; color: string }[];
   incomeLabel: string;
+  /** Mês em destaque; os demais ficam esmaecidos. */
+  selected?: string;
+  onSelect?: (month: string) => void;
 }) {
   const axis = useCompactAxis();
   return (
     <div>
       <div className="h-64">
       <ResponsiveContainer>
-        <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="24%">
+        <ComposedChart
+          data={data}
+          margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+          barCategoryGap="24%"
+          onClick={(e) => e?.activeLabel && onSelect?.(String(e.activeLabel))}
+          style={{ cursor: onSelect ? 'pointer' : undefined }}
+        >
           <CartesianGrid {...GRID} />
           <XAxis dataKey="month" {...AXIS} tickFormatter={monthLabel} interval="preserveStartEnd" minTickGap={16} />
           <YAxis {...AXIS} tickFormatter={axis} width={64} />
@@ -340,7 +349,11 @@ export function ProjectionBars({
               stroke="var(--surface)"
               strokeWidth={1}
               radius={i === series.length - 1 ? [4, 4, 0, 0] : 0}
-            />
+            >
+              {data.map((d) => (
+                <Cell key={String(d.month)} fillOpacity={!selected || d.month === selected ? 1 : 0.35} />
+              ))}
+            </Bar>
           ))}
           <Line
             type="monotone"

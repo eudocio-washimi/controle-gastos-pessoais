@@ -1,9 +1,9 @@
-import { buildOccurrences, totalIncome, type CardInfo, type Forecast } from './calc.ts';
+import { buildOccurrences, totalIncome, type CardInfo } from './calc.ts';
 import { addDaysISO, addMonthsYM, currentMonth, daysInMonth, diffDays, lastMonths, monthOf, todayISO } from './dates.ts';
-import type { OccurrenceOverride, PlannedEntry, Tx } from './types.ts';
+import type { Occurrence, OccurrenceOverride, PlannedEntry, Tx } from './types.ts';
 
-// Projeção dos próximos meses: faturas já comprometidas (parcelas e compras lançadas), estimativa de novos
-// gastos, receitas e despesas previstas, e o saldo que deve sobrar mês a mês.
+// Projeção mês a mês: faturas já comprometidas (parcelas e compras lançadas), estimativa de novos gastos,
+// receitas e despesas previstas e quanto sobra em cada mês. Cada mês é independente: nada acumula de um para outro.
 
 const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -12,6 +12,17 @@ const maxMonth = (a: string | null, b: string | null) => (!a ? b : !b ? a : a > 
 /** Até onde projetar: 12 meses, ou até a última parcela (no máximo 24 meses). */
 const MIN_HORIZON = 12;
 const MAX_HORIZON = 24;
+
+/** Lançamento que compõe uma fatura. */
+export interface BillItem {
+  description: string;
+  /** Positivo = cobrança; negativo = estorno/crédito. */
+  amount: number;
+  date: string;
+  installment: { number: number; total: number } | null;
+  /** Parcela que o banco ainda não informou, deduzida pelo app. */
+  projected: boolean;
+}
 
 export interface CardMonth {
   /** Parcelas de compras parceladas cobradas nesta fatura. */
@@ -23,6 +34,7 @@ export interface CardMonth {
   total: number;
   /** Fatura do mês corrente já paga. */
   paid: boolean;
+  items: BillItem[];
 }
 
 export interface InstallmentPlan {
@@ -59,20 +71,18 @@ export interface ProjectionMonth {
   month: string;
   income: number;
   fixed: number;
+  /** Receitas e despesas de Planejamento que caem neste mês. */
+  occurrences: Occurrence[];
   installments: number;
   purchases: number;
   cardEstimated: number;
   cardsTotal: number;
   variable: number;
-  /** Receitas menos todas as saídas do mês: quanto sobra (ou falta). */
+  /** Receitas menos todas as saídas do mês: quanto sobra (ou falta) só neste mês. */
   leftover: number;
-  /** Saldo projetado no fim do mês. */
-  balance: number;
 }
 
 export interface Projection {
-  /** Saldo previsto no fim do mês corrente (ponto de partida, igual ao da tela Início). */
-  startBalance: number;
   months: ProjectionMonth[];
   cards: CardOutlook[];
   incomeSource: 'planned' | 'average';
@@ -80,8 +90,6 @@ export interface Projection {
   avgVariable: number;
   lastInstallmentMonth: string | null;
   remainingInstallments: number;
-  /** Primeiro mês em que o saldo projetado fica negativo. */
-  negativeFrom: string | null;
 }
 
 /** Mês da fatura de um lançamento: o informado pelo banco ou, se faltar, deduzido do ciclo do cartão. */
@@ -104,19 +112,38 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const all = txs.filter((t) => t.accountId === id);
   const items = all.filter((t) => t.category !== 'pagamento_fatura');
 
-  const buckets = new Map<string, { installments: number; purchases: number }>();
-  const bucket = (m: string) => buckets.get(m) ?? buckets.set(m, { installments: 0, purchases: 0 }).get(m)!;
+  const buckets = new Map<string, { installments: number; purchases: number; items: BillItem[] }>();
+  const bucket = (m: string) => buckets.get(m) ?? buckets.set(m, { installments: 0, purchases: 0, items: [] }).get(m)!;
   const value = (t: Tx) => (t.kind === 'expense' ? t.amount : -t.amount);
 
   // Parcelas agrupadas por compra; as que o banco ainda não informou são deduzidas a partir da última conhecida.
-  const groups = new Map<string, { description: string; total: number; parts: Map<number, { month: string; amount: number }> }>();
+  // O banco às vezes encurta o nome da loja entre uma parcela e outra ("SHOPEE *lacrista" / "SHOPEE *lacristacomerc"):
+  // mesma data de compra e mesmo número de parcelas, com um nome começando pelo outro, é a mesma compra.
+  type Group = { description: string; total: number; parts: Map<number, { month: string; amount: number }> };
+  const groups = new Map<string, Group>();
+  const groupFor = (desc: string, purchaseDate: string | null, total: number): Group => {
+    const norm = desc.toLowerCase();
+    if (purchaseDate) {
+      for (const [k, g] of groups) {
+        const other = g.description.toLowerCase();
+        if (k.startsWith(`${purchaseDate}|${total}|`) && (norm.startsWith(other) || other.startsWith(norm))) return g;
+      }
+    }
+    const key = `${purchaseDate ?? ''}|${total}|${desc}`;
+    return groups.get(key) ?? groups.set(key, { description: desc, total, parts: new Map() }).get(key)!;
+  };
   for (const t of items) {
     const m = billMonthOf(t, card);
+    bucket(m).items.push({
+      description: t.description,
+      amount: value(t),
+      date: t.date,
+      installment: t.installment ? { number: t.installment.number, total: t.installment.total } : null,
+      projected: false,
+    });
     if (t.installment) {
       bucket(m).installments += value(t);
-      const desc = baseDescription(t.description);
-      const key = `${desc}|${t.installment.purchaseDate ?? ''}|${t.installment.total}`;
-      const g = groups.get(key) ?? groups.set(key, { description: desc, total: t.installment.total, parts: new Map() }).get(key)!;
+      const g = groupFor(baseDescription(t.description), t.installment.purchaseDate, t.installment.total);
       g.parts.set(t.installment.number, { month: m, amount: t.amount });
     } else {
       bucket(m).purchases += value(t);
@@ -139,8 +166,20 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
     let projected = false;
     for (let k = last + 1; k <= g.total; k++) {
       const m = addMonthsYM(lastPart.month, k - last);
+      // Garantia contra duplicar: a fatura já tem esta parcela (mesmo número e valor) vinda do banco.
+      const known = bucket(m).items.some(
+        (it) => !it.projected && it.installment?.number === k && it.installment.total === g.total && Math.abs(it.amount - lastPart.amount) < 0.01,
+      );
+      if (known) continue;
       g.parts.set(k, { month: m, amount: lastPart.amount });
       bucket(m).installments += lastPart.amount;
+      bucket(m).items.push({
+        description: `${g.description} ${k}/${g.total}`,
+        amount: lastPart.amount,
+        date: `${m}-01`,
+        installment: { number: k, total: g.total },
+        projected: true,
+      });
       projected = true;
     }
     const pending = [...g.parts.entries()].filter(([, p]) => p.month >= firstOpen).sort((a, b) => a[0] - b[0]);
@@ -170,11 +209,12 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const byMonth: Record<string, CardMonth> = {};
   const end = maxMonth(months.sort().at(-1) ?? null, addMonthsYM(ym, MAX_HORIZON))!;
   for (let m = ym; m <= end; m = addMonthsYM(m, 1)) {
-    const b = buckets.get(m) ?? { installments: 0, purchases: 0 };
+    const b = buckets.get(m) ?? { installments: 0, purchases: 0, items: [] };
     const installments = round2(b.installments);
     const purchases = round2(b.purchases);
     const estimated = m < openMonth ? 0 : round2(Math.max(0, avgPurchases - Math.max(0, purchases)));
-    byMonth[m] = { installments, purchases, estimated, total: round2(installments + purchases + estimated), paid: m === ym && paid };
+    const items = [...b.items].sort((x, y) => Number(!!y.installment) - Number(!!x.installment) || y.amount - x.amount);
+    byMonth[m] = { installments, purchases, estimated, total: round2(installments + purchases + estimated), paid: m === ym && paid, items };
   }
 
   const futureInstallments = Object.entries(byMonth).filter(([m, c]) => m >= firstOpen && c.installments > 0.005);
@@ -205,7 +245,7 @@ export function project(
   cards: CardInfo[],
   planned: PlannedEntry[],
   overrides: Record<string, OccurrenceOverride>,
-  fc: Forecast,
+  avgVariable3m: number,
   includeEstimates: boolean,
 ): Projection {
   const ym = currentMonth();
@@ -216,19 +256,17 @@ export function project(
   if (lastInstallmentMonth && lastInstallmentMonth > horizonEnd) horizonEnd = lastInstallmentMonth;
   if (horizonEnd > addMonthsYM(ym, MAX_HORIZON)) horizonEnd = addMonthsYM(ym, MAX_HORIZON);
 
-  const first = addMonthsYM(ym, 1);
-  const occurrences = buildOccurrences(planned, overrides, txs, `${first}-01`, `${horizonEnd}-31`).filter((o) => o.status !== 'ignorado');
+  const occurrences = buildOccurrences(planned, overrides, txs, `${ym}-01`, `${horizonEnd}-31`).filter((o) => o.status !== 'ignorado');
   const plannedIn = (m: string, type: 'income' | 'expense') =>
     round2(sum(occurrences.filter((o) => o.entry.type === type && monthOf(o.date) === m).map((o) => o.entry.amount)));
 
   // Sem salário cadastrado em Planejamento, usa a média das receitas reais dos últimos 3 meses.
   const incomeSource = planned.some((e) => e.type === 'income') ? 'planned' : 'average';
   const avgIncome3m = round2(sum(lastMonths(addMonthsYM(ym, -1), 3).map((m) => totalIncome(txs, m))) / 3);
-  const avgVariable = includeEstimates ? fc.avgVariable3m : 0;
+  const avgVariable = includeEstimates ? avgVariable3m : 0;
 
   const months: ProjectionMonth[] = [];
-  let balance = fc.finalBalance;
-  for (let m = first; m <= horizonEnd; m = addMonthsYM(m, 1)) {
+  for (let m = ym; m <= horizonEnd; m = addMonthsYM(m, 1)) {
     const income = incomeSource === 'planned' ? plannedIn(m, 'income') : avgIncome3m;
     const fixed = plannedIn(m, 'expense');
     const cm = outlooks.map((o) => o.byMonth[m]);
@@ -237,19 +275,17 @@ export function project(
     const cardEstimated = includeEstimates ? round2(sum(cm.map((c) => c.estimated))) : 0;
     const cardsTotal = round2(installments + purchases + cardEstimated);
     const leftover = round2(income - fixed - cardsTotal - avgVariable);
-    balance = round2(balance + leftover);
-    months.push({ month: m, income, fixed, installments, purchases, cardEstimated, cardsTotal, variable: avgVariable, leftover, balance });
+    const monthOccurrences = occurrences.filter((o) => monthOf(o.date) === m);
+    months.push({ month: m, income, fixed, occurrences: monthOccurrences, installments, purchases, cardEstimated, cardsTotal, variable: avgVariable, leftover });
   }
 
   return {
-    startBalance: fc.finalBalance,
     months,
     cards: outlooks,
     incomeSource,
     avgIncome3m,
-    avgVariable: fc.avgVariable3m,
+    avgVariable: avgVariable3m,
     lastInstallmentMonth,
     remainingInstallments: round2(sum(outlooks.map((o) => o.remainingInstallments))),
-    negativeFrom: months.find((m) => m.balance < 0)?.month ?? null,
   };
 }
