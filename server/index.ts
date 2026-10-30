@@ -10,6 +10,9 @@ import { getItem, hasCredentials, setPluggyCredentials, syncFromPluggy } from '.
 setPluggyCredentials({ clientId: process.env.PLUGGY_CLIENT_ID ?? '', clientSecret: process.env.PLUGGY_CLIENT_SECRET ?? '' });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// APK do app Android (gerado com npm run android:apk e copiado para release/). Fica fora da pasta pública:
+// só é entregue para quem fez login.
+const apkFile = path.join(root, 'release', 'meus-gastos.apk');
 const isUuid = (s: string) => /^[0-9a-f-]{36}$/i.test(s);
 
 function envItemIds(): string[] {
@@ -76,7 +79,7 @@ app.use('/api', (req, res, next) => {
 });
 
 app.get('/api/status', (req, res) => {
-  res.json({ credentials: hasCredentials(), items: allItemIds(req).length, demo: isDemo(req), auth: Boolean(PASSWORD) });
+  res.json({ credentials: hasCredentials(), items: allItemIds(req).length, demo: isDemo(req), auth: Boolean(PASSWORD), androidApk: fs.existsSync(apkFile) });
 });
 
 app.get('/api/sync', async (req, res) => {
@@ -102,6 +105,11 @@ app.get('/api/items', async (req, res) => {
     }),
   );
   res.json(items);
+});
+
+app.get('/api/download/android', (_req, res) => {
+  if (!fs.existsSync(apkFile)) return res.status(404).json({ error: 'APK não disponível neste servidor.' });
+  res.download(apkFile, 'meus-gastos.apk', { headers: { 'Content-Type': 'application/vnd.android.package-archive' } });
 });
 
 /** Confere se o item existe no Pluggy; quem guarda a lista é o app. */

@@ -15,6 +15,8 @@ export interface Status {
   mode: 'server' | 'device';
   /** Servidor protegido por senha (APP_PASSWORD). */
   auth?: boolean;
+  /** O servidor tem o APK do app Android para baixar. */
+  androidApk?: boolean;
 }
 
 /** O servidor está protegido por senha e o token salvo não vale (ou não existe). */
@@ -58,6 +60,22 @@ const serverApi = {
 export async function login(password: string) {
   const { token } = await request<{ token: string | null }>('/api/login', { method: 'POST', body: JSON.stringify({ password }) });
   save('token', token);
+}
+
+/** Baixa o APK do app Android. O token vai no cabeçalho (não na URL), por isso o download passa por um blob. */
+export async function downloadAndroidApk() {
+  const token = load<string | null>('token', null);
+  const res = await fetch('/api/download/android', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (res.status === 401) throw new AuthError('Faça login para continuar.');
+  if (!res.ok) throw new Error(`Erro ${res.status} ao baixar o APK`);
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'meus-gastos.apk';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export function logout() {

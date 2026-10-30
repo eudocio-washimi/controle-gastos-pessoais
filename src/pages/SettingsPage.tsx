@@ -1,8 +1,8 @@
-import { KeyRound, Link2, LogOut, Trash2 } from 'lucide-react';
+import { Download, KeyRound, Link2, LogOut, Smartphone, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Empty } from '../components/ui.tsx';
 import { useApp } from '../context/AppContext.tsx';
-import { api, isDevice, logout, saveDeviceCredentials, type Status } from '../lib/api.ts';
+import { api, downloadAndroidApk, isDevice, logout, saveDeviceCredentials, type Status } from '../lib/api.ts';
 import type { ItemInfo } from '../lib/types.ts';
 
 // Tema e conexão com o Pluggy sobrevivem à limpeza dos dados locais.
@@ -135,6 +135,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {status?.androidApk && <AndroidDownload />}
+
       <div className="card">
         <div className="card-title">Dados locais</div>
         <p className="card-sub mt-1">
@@ -214,6 +216,45 @@ function DeviceCredentials({ configured, onSaved }: { configured: boolean; onSav
           )}
         </div>
       </form>
+      {msg && <p className={`mt-2 text-sm ${msg.ok ? 'text-[var(--good-text)]' : 'text-[var(--critical)]'}`}>{msg.text}</p>}
+    </div>
+  );
+}
+
+function AndroidDownload() {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const download = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await downloadAndroidApk();
+      setMsg({ ok: true, text: 'Download iniciado. Abra o arquivo meus-gastos.apk para instalar.' });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="flex items-start gap-3">
+        <span className="rounded-xl bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
+          <Smartphone size={20} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="card-title">App para Android</div>
+          <p className="card-sub mt-1">
+            Baixe e instale no celular (o Android vai pedir para permitir “instalar apps desconhecidos”). No app, informe o Client ID e o Client
+            Secret do Pluggy em Configurações e cadastre suas conexões e o salário: os dados do app ficam no celular.
+          </p>
+        </div>
+      </div>
+      <button className="btn-primary mt-3" onClick={() => void download()} disabled={busy}>
+        <Download size={16} /> {busy ? 'Baixando…' : 'Baixar app Android (4 MB)'}
+      </button>
       {msg && <p className={`mt-2 text-sm ${msg.ok ? 'text-[var(--good-text)]' : 'text-[var(--critical)]'}`}>{msg.text}</p>}
     </div>
   );
