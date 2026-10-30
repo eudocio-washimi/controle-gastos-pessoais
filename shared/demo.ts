@@ -83,9 +83,13 @@ export function buildDemoData(): SyncPayload {
 
   const tx: Transaction[] = [];
   let seq = 0;
-  const add = (accountId: string, date: Date, description: string, amount: number, kind: Transaction['kind'], rawCategory: string) => {
-    if (date > today) return;
-    tx.push({ id: `demo-tx-${++seq}`, accountId, date: iso(date), description, amount: round(amount), kind, rawCategory });
+  const add = (
+    accountId: string, date: Date, description: string, amount: number, kind: Transaction['kind'], rawCategory: string,
+    extra: Pick<Transaction, 'installment'> = {},
+  ) => {
+    // Parcelas futuras de cartão vêm do banco com a data em que serão cobradas; o resto só até hoje.
+    if (date > today && !extra.installment) return;
+    tx.push({ id: `demo-tx-${++seq}`, accountId, date: iso(date), description, amount: round(amount), kind, rawCategory, ...extra });
   };
 
   for (let m = 6; m >= 0; m--) {
@@ -119,6 +123,22 @@ export function buildDemoData(): SyncPayload {
     }
   }
 
+  // Compras parceladas (todas as parcelas, inclusive as futuras).
+  const INSTALLMENTS = [
+    { card: 'demo-itau-card', desc: 'Notebook Dell Inspiron', total: 10, amount: 489.9, monthsAgo: 4, day: 14, category: 'Electronics' },
+    { card: 'demo-nu-card', desc: 'Geladeira Brastemp', total: 12, amount: 349.92, monthsAgo: 2, day: 8, category: 'Shopping' },
+    { card: 'demo-nu-card', desc: 'Passagem aérea LATAM', total: 6, amount: 412.5, monthsAgo: 5, day: 22, category: 'Airport and airlines' },
+    { card: 'demo-itau-card', desc: 'Tênis Nike', total: 3, amount: 199.97, monthsAgo: 1, day: 5, category: 'Shopping' },
+  ];
+  for (const p of INSTALLMENTS) {
+    const purchase = new Date(today.getFullYear(), today.getMonth() - p.monthsAgo, p.day, 12);
+    for (let k = 1; k <= p.total; k++) {
+      add(p.card, addMonths(purchase, k - 1), `${p.desc} ${k}/${p.total}`, p.amount, 'expense', p.category, {
+        installment: { number: k, total: p.total, purchaseDate: iso(purchase) },
+      });
+    }
+  }
+
   // Pagamentos das faturas: valor das compras do ciclo anterior.
   const bills: Bill[] = [];
   for (const card of accounts.filter((a) => a.type === 'CREDIT')) {
@@ -148,6 +168,15 @@ export function buildDemoData(): SyncPayload {
       a.balance = round(Math.max(0, -net));
       a.creditData!.availableCreditLimit = round(a.creditData!.creditLimit - a.balance);
     }
+  }
+
+  // Mês da fatura de cada lançamento de cartão (como o billForecastDate do Pluggy).
+  for (const t of tx) {
+    const cycle = CARD_CYCLE[t.accountId];
+    if (!cycle || t.description === 'Pagamento recebido') continue;
+    const d = new Date(t.date + 'T12:00:00');
+    const close = new Date(d.getFullYear(), d.getMonth() + (d.getDate() > cycle.closeDay ? 1 : 0), cycle.closeDay, 12);
+    t.billMonth = iso(addDays(close, cycle.offset)).slice(0, 7);
   }
 
   tx.sort((a, b) => b.date.localeCompare(a.date));

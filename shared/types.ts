@@ -36,6 +36,17 @@ export interface Transaction {
   kind: 'expense' | 'income';
   /** Categoria original do Pluggy (em inglês). */
   rawCategory: string | null;
+  /** Cartão: mês (YYYY-MM) da fatura em que o lançamento é cobrado. */
+  billMonth?: string | null;
+  /** Cartão: parcela de uma compra parcelada (ex.: 3 de 10). */
+  installment?: Installment | null;
+}
+
+export interface Installment {
+  number: number;
+  total: number;
+  /** Data da compra original (YYYY-MM-DD), quando o banco informa. */
+  purchaseDate: string | null;
 }
 
 export interface Bill {

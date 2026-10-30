@@ -1,6 +1,6 @@
 import { App as CapApp } from '@capacitor/app';
 import {
-  CalendarClock, CreditCard, Eye, EyeOff, FileText, Home, Landmark, Moon, PieChart, RefreshCw, Settings, Sun, WifiOff,
+  CalendarClock, CreditCard, Eye, EyeOff, FileText, Home, Landmark, Moon, PieChart, RefreshCw, Settings, Sun, TrendingUp, WifiOff,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useApp } from './context/AppContext.tsx';
@@ -12,16 +12,18 @@ import CategoriesPage from './pages/CategoriesPage.tsx';
 import HomePage from './pages/HomePage.tsx';
 import LoginPage from './pages/LoginPage.tsx';
 import PlanningPage from './pages/PlanningPage.tsx';
+import ProjectionPage from './pages/ProjectionPage.tsx';
 import ReportPage from './pages/ReportPage.tsx';
 import SettingsPage from './pages/SettingsPage.tsx';
 
 const PAGES = [
-  { id: 'inicio', label: 'Início', icon: Home, el: HomePage },
-  { id: 'contas', label: 'Contas', icon: Landmark, el: AccountsPage },
-  { id: 'cartoes', label: 'Cartões', icon: CreditCard, el: CardsPage },
-  { id: 'categorias', label: 'Categorias', icon: PieChart, el: CategoriesPage },
-  { id: 'planejamento', label: 'Planejamento', icon: CalendarClock, el: PlanningPage },
-  { id: 'relatorio', label: 'Relatório', icon: FileText, el: ReportPage },
+  { id: 'inicio', label: 'Início', short: 'Início', icon: Home, el: HomePage },
+  { id: 'contas', label: 'Contas', short: 'Contas', icon: Landmark, el: AccountsPage },
+  { id: 'cartoes', label: 'Cartões', short: 'Cartões', icon: CreditCard, el: CardsPage },
+  { id: 'categorias', label: 'Categorias', short: 'Categ.', icon: PieChart, el: CategoriesPage },
+  { id: 'planejamento', label: 'Planejamento', short: 'Planejar', icon: CalendarClock, el: PlanningPage },
+  { id: 'projecao', label: 'Projeção', short: 'Projeção', icon: TrendingUp, el: ProjectionPage },
+  { id: 'relatorio', label: 'Relatório', short: 'Relatório', icon: FileText, el: ReportPage },
 ] as const;
 
 const RESUME_SYNC_MS = 15 * 60 * 1000;
@@ -129,14 +131,14 @@ export default function App() {
       </div>
 
       {/* Navegação inferior (mobile) */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-black/5 bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] dark:border-white/10 md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-7 border-t border-black/5 bg-[var(--surface)] pb-[env(safe-area-inset-bottom)] dark:border-white/10 md:hidden">
         {PAGES.map((p) => {
           const Icon = p.icon;
           const active = page === p.id;
           return (
             <button key={p.id} onClick={() => go(p.id)} className={`flex flex-col items-center gap-0.5 py-2 text-[10px] font-medium ${active ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--muted)]'}`}>
               <Icon size={20} strokeWidth={active ? 2.4 : 2} />
-              {p.label}
+              {p.short}
             </button>
           );
         })}

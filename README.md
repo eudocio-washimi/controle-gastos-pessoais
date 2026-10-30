@@ -76,6 +76,7 @@ Sempre que mudar o código em `src/`, rode `npm run android:sync` antes de gerar
 | `shared/pluggy.ts` | Autenticação (`/auth`, API Key em cache), contas, transações paginadas e faturas (`/bills`) |
 | `shared/demo.ts` | Gerador de dados fictícios |
 | `src/lib/categories.ts` | Categorias em português e mapeamento das categorias do Pluggy |
+| `src/lib/projection.ts` | Projeção mês a mês: faturas futuras, parcelas, sobra e saldo |
 | `src/lib/calc.ts` | Totais, saldo histórico, ciclo de fatura, confirmação automática, previsão de saldo, limites |
 | `src/lib/api.ts` | Acesso aos dados: via servidor (web) ou direto do aparelho (Android) |
 | `capacitor.config.ts`, `android/` | Configuração e projeto nativo Android |
@@ -86,5 +87,6 @@ Sempre que mudar o código em `src/`, rode `npm run android:sync` antes de gerar
 
 - **Gastos** = despesas de contas e cartões, exceto pagamento de fatura, investimentos e transferências entre contas próprias (evita contar duas vezes). Dá para trocar a categoria de qualquer transação tocando nela.
 - **Previsão do fim do mês** = saldo atual + receitas previstas pendentes − despesas previstas pendentes − faturas que vencem no mês − estimativa de gastos restantes (média dos gastos à vista dos últimos 3 meses menos o já gasto no mês, sem contar os lançamentos previstos).
+- **Projeção dos próximos meses** (tela Projeção): a fatura de cada mês soma as parcelas e compras já lançadas no cartão, usando o mês da fatura informado pelo banco (`billForecastDate` do Pluggy). Parcelas futuras que o banco ainda não informou são deduzidas da última parcela conhecida. Opcionalmente soma uma estimativa de novos gastos (média das compras à vista das últimas 3 faturas e dos gastos no débito/Pix). Receitas e despesas vêm de Planejamento (sem salário cadastrado, usa a média das receitas dos últimos 3 meses). Mostra a sobra de cada mês, o saldo projetado, quando terminam as parcelas e quando cada cartão zera.
 - **Confirmação automática**: um lançamento previsto é confirmado quando existe uma movimentação real do mesmo tipo com valor até 5% diferente e data até ±2 dias. Dá para desfazer, confirmar manualmente ou ignorar uma ocorrência.
 - **Offline**: o último sincronismo, os lançamentos previstos e os limites ficam no `localStorage`; em produção um service worker mantém o app abrindo sem rede.

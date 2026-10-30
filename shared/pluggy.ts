@@ -148,6 +148,13 @@ interface PluggyTransaction {
   amount: number;
   type: 'DEBIT' | 'CREDIT';
   category?: string | null;
+  creditCardMetadata?: {
+    installmentNumber?: number | null;
+    totalInstallments?: number | null;
+    purchaseDate?: string | null;
+    /** Mês (YYYY-MM) da fatura em que a transação será cobrada. */
+    billForecastDate?: string | null;
+  } | null;
 }
 
 interface PluggyBill {
@@ -177,6 +184,7 @@ function normalizeTransaction(t: PluggyTransaction, accountType: string): Transa
   if (t.amount === 0) kind = t.type === 'CREDIT' ? 'income' : 'expense';
   else if (accountType === 'CREDIT') kind = t.amount > 0 ? 'expense' : 'income';
   else kind = t.amount < 0 ? 'expense' : 'income';
+  const m = t.creditCardMetadata;
   return {
     id: t.id,
     accountId: t.accountId,
@@ -185,6 +193,11 @@ function normalizeTransaction(t: PluggyTransaction, accountType: string): Transa
     amount: Math.abs(t.amount),
     kind,
     rawCategory: t.category ?? null,
+    billMonth: m?.billForecastDate?.slice(0, 7) ?? null,
+    installment:
+      m?.totalInstallments && m.totalInstallments > 1 && m.installmentNumber
+        ? { number: m.installmentNumber, total: m.totalInstallments, purchaseDate: m.purchaseDate?.slice(0, 10) ?? null }
+        : null,
   };
 }
 

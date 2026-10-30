@@ -1,5 +1,5 @@
 import {
-  Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, Line, LineChart, Pie, PieChart, ReferenceLine,
+  Bar, BarChart, CartesianGrid, ComposedChart, Cell, LabelList, Legend, Line, LineChart, Pie, PieChart, ReferenceLine,
   ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipProps,
 } from 'recharts';
 import { useApp } from '../../context/AppContext.tsx';
@@ -308,6 +308,66 @@ export function Waterfall({ steps }: { steps: WaterfallStep[] }) {
           </Bar>
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+// 8. Projeção — saídas empilhadas por mês (mesmo eixo em R$) com a receita como linha de referência
+export function ProjectionBars({
+  data, series, incomeLabel,
+}: {
+  data: Record<string, number | string>[];
+  series: { key: string; label: string; color: string }[];
+  incomeLabel: string;
+}) {
+  const axis = useCompactAxis();
+  return (
+    <div>
+      <div className="h-64">
+      <ResponsiveContainer>
+        <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="24%">
+          <CartesianGrid {...GRID} />
+          <XAxis dataKey="month" {...AXIS} tickFormatter={monthLabel} interval="preserveStartEnd" minTickGap={16} />
+          <YAxis {...AXIS} tickFormatter={axis} width={64} />
+          <Tooltip content={<ChartTooltip labelFormatter={monthLabel} />} cursor={{ fill: 'var(--grid)', opacity: 0.4 }} />
+          {series.map((s, i) => (
+            <Bar
+              key={s.key}
+              dataKey={s.key}
+              name={s.label}
+              stackId="saidas"
+              fill={s.color}
+              stroke="var(--surface)"
+              strokeWidth={1}
+              radius={i === series.length - 1 ? [4, 4, 0, 0] : 0}
+            />
+          ))}
+          <Line
+            type="monotone"
+            dataKey="income"
+            name={incomeLabel}
+            stroke="var(--ink-2)"
+            strokeWidth={2}
+            strokeDasharray="5 4"
+            dot={false}
+            activeDot={{ r: 4, stroke: 'var(--surface)', strokeWidth: 2 }}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+      </div>
+      {/* Legenda em HTML: quebra linha no celular sem invadir o eixo. */}
+      <ul className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-[var(--ink-2)]">
+        {series.map((s) => (
+          <li key={s.key} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+            {s.label}
+          </li>
+        ))}
+        <li className="flex items-center gap-1.5">
+          <span className="w-3 border-t-2 border-dashed border-[var(--ink-2)]" />
+          {incomeLabel}
+        </li>
+      </ul>
     </div>
   );
 }
