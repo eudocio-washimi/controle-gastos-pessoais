@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api } from '../lib/api.ts';
+import { api, AuthError } from '../lib/api.ts';
 import {
   buildOccurrences, cardInfo, categorySlots, creditAccounts, enrich, forecast, slotKey, type CardInfo, type Forecast,
 } from '../lib/calc.ts';
@@ -13,6 +13,8 @@ interface AppState {
   loading: boolean;
   error: string | null;
   offline: boolean;
+  /** O servidor pede senha: o app mostra a tela de login. */
+  needsLogin: boolean;
   sync: () => Promise<void>;
   txs: Tx[];
   cards: CardInfo[];
@@ -64,6 +66,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false);
   const [planned, setPlanned] = useState<PlannedEntry[]>(() => load<PlannedEntry[]>('planned', []));
   const [overrides, setOverrides] = useState<Record<string, OccurrenceOverride>>(() => load('overrides', {}));
   const [limits, setLimits] = useState<CategoryLimits>(() => load('limits', {}));
@@ -93,6 +96,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const data = await api.sync();
       setPayload(data);
       setOffline(false);
+      setNeedsLogin(false);
       save('payload', data);
       if (data.demo && !load('demoSeeded', false)) {
         save('demoSeeded', true);
@@ -110,6 +114,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
     } catch (e) {
+      if (e instanceof AuthError) {
+        setNeedsLogin(true);
+        return;
+      }
       setOffline(true);
       setError(`Não foi possível sincronizar: ${(e as Error).message}. Exibindo dados salvos.`);
     } finally {
@@ -151,6 +159,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loading,
     error,
     offline,
+    needsLogin,
     sync,
     txs,
     cards,

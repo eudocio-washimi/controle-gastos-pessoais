@@ -1,0 +1,22 @@
+# Blueprint do Render (https://render.com/docs/blueprint-spec): plano gratuito, um único serviço
+# que entrega o frontend e a API. Os segredos (sync: false) são pedidos no painel ao criar o serviço.
+services:
+  - type: web
+    name: meus-gastos
+    runtime: node
+    plan: free
+    region: virginia
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: APP_PASSWORD
+        sync: false
+      - key: PLUGGY_CLIENT_ID
+        sync: false
+      - key: PLUGGY_CLIENT_SECRET
+        sync: false
+      - key: PLUGGY_ITEM_IDS
+        sync: false

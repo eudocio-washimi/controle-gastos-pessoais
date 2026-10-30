@@ -1,13 +1,16 @@
+import { App as CapApp } from '@capacitor/app';
 import {
   CalendarClock, CreditCard, Eye, EyeOff, FileText, Home, Landmark, Moon, PieChart, RefreshCw, Settings, Sun, WifiOff,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from './context/AppContext.tsx';
+import { isDevice } from './lib/api.ts';
 import { relativeTime } from './lib/format.ts';
 import AccountsPage from './pages/AccountsPage.tsx';
 import CardsPage from './pages/CardsPage.tsx';
 import CategoriesPage from './pages/CategoriesPage.tsx';
 import HomePage from './pages/HomePage.tsx';
+import LoginPage from './pages/LoginPage.tsx';
 import PlanningPage from './pages/PlanningPage.tsx';
 import ReportPage from './pages/ReportPage.tsx';
 import SettingsPage from './pages/SettingsPage.tsx';
@@ -21,6 +24,8 @@ const PAGES = [
   { id: 'relatorio', label: 'Relatório', icon: FileText, el: ReportPage },
 ] as const;
 
+const RESUME_SYNC_MS = 15 * 60 * 1000;
+
 type PageId = (typeof PAGES)[number]['id'] | 'config';
 
 const readHash = (): PageId => {
@@ -29,8 +34,29 @@ const readHash = (): PageId => {
 };
 
 export default function App() {
-  const { payload, loading, error, offline, sync, hidden, toggleHidden, dark, toggleTheme } = useApp();
+  const { payload, loading, error, offline, needsLogin, sync, hidden, toggleHidden, dark, toggleTheme } = useApp();
   const [page, setPage] = useState<PageId>(readHash);
+  const syncedAt = useRef(payload?.syncedAt);
+  syncedAt.current = payload?.syncedAt;
+
+  // Botão "voltar" do Android: fecha o modal aberto, depois volta ao Início, depois sai do app.
+  useEffect(() => {
+    if (!isDevice) return;
+    const sub = CapApp.addListener('backButton', () => {
+      if (document.querySelector('[role="dialog"]')) window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      else if (readHash() !== 'inicio') go('inicio');
+      else void CapApp.exitApp();
+    });
+    // Ao voltar para o app depois de um tempo, busca dados novos.
+    const resume = CapApp.addListener('resume', () => {
+      const last = syncedAt.current ? Date.parse(syncedAt.current) : 0;
+      if (Date.now() - last > RESUME_SYNC_MS) void sync();
+    });
+    return () => {
+      void sub.then((s) => s.remove());
+      void resume.then((s) => s.remove());
+    };
+  }, [sync]);
 
   useEffect(() => {
     const onHash = () => setPage(readHash());
@@ -42,6 +68,8 @@ export default function App() {
     location.hash = `/${id}`;
     window.scrollTo({ top: 0 });
   };
+
+  if (needsLogin) return <LoginPage />;
 
   const current = PAGES.find((p) => p.id === page);
   const Page = page === 'config' ? SettingsPage : current!.el;
@@ -63,7 +91,7 @@ export default function App() {
       </aside>
 
       <div className="min-w-0 flex-1">
-        <header className="sticky top-0 z-30 border-b border-black/5 bg-[var(--page)]/85 backdrop-blur dark:border-white/10">
+        <header className="sticky top-0 z-30 border-b pt-[env(safe-area-inset-top)] border-black/5 bg-[var(--page)]/85 backdrop-blur dark:border-white/10">
           <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3">
             <div className="min-w-0 flex-1">
               <h1 className="truncate text-lg font-semibold">{page === 'config' ? 'Configurações' : current!.label}</h1>
@@ -142,7 +170,7 @@ function Loading({ loading }: { loading: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center py-24 text-sm text-[var(--muted)]">
       <RefreshCw className={`mb-3 ${loading ? 'animate-spin' : ''}`} />
-      {loading ? 'Buscando seus dados no Pluggy…' : 'Nenhum dado sincronizado ainda. Verifique se o servidor está rodando.'}
+      {loading ? 'Buscando seus dados no Pluggy…' : isDevice ? 'Nenhum dado sincronizado ainda. Verifique sua conexão com a internet.' : 'Nenhum dado sincronizado ainda. Verifique se o servidor está rodando.'}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { Account, Bill, SyncPayload, Transaction } from '../shared/types.ts';
+import type { Account, Bill, SyncPayload, Transaction } from './types.ts';
 
 // Dados fictícios, determinísticos, usados quando não há credenciais do Pluggy.
 

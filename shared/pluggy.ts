@@ -1,24 +1,35 @@
-import type { Account, Bill, SyncPayload, Transaction } from '../shared/types.ts';
+import type { Account, Bill, SyncPayload, Transaction } from './types.ts';
 
 const BASE_URL = 'https://api.pluggy.ai';
 // A API Key do Pluggy expira em 2h; renovamos com folga.
 const API_KEY_TTL_MS = 100 * 60 * 1000;
 
+export interface PluggyCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+// Usado tanto pelo servidor (credenciais do .env) quanto pelo app Android (credenciais salvas no aparelho).
+let credentials: PluggyCredentials | null = null;
 let cachedKey: { value: string; expiresAt: number } | null = null;
 
+export function setPluggyCredentials(c: PluggyCredentials | null) {
+  const next = c?.clientId && c.clientSecret ? c : null;
+  if (next?.clientId !== credentials?.clientId || next?.clientSecret !== credentials?.clientSecret) cachedKey = null;
+  credentials = next;
+}
+
 export function hasCredentials(): boolean {
-  return Boolean(process.env.PLUGGY_CLIENT_ID && process.env.PLUGGY_CLIENT_SECRET);
+  return credentials !== null;
 }
 
 async function getApiKey(): Promise<string> {
   if (cachedKey && cachedKey.expiresAt > Date.now()) return cachedKey.value;
+  if (!credentials) throw new Error('Credenciais do Pluggy não configuradas');
   const res = await fetch(`${BASE_URL}/auth`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      clientId: process.env.PLUGGY_CLIENT_ID,
-      clientSecret: process.env.PLUGGY_CLIENT_SECRET,
-    }),
+    body: JSON.stringify(credentials),
   });
   if (!res.ok) throw new Error(`Falha na autenticação com o Pluggy (${res.status})`);
   const { apiKey } = (await res.json()) as { apiKey: string };
@@ -26,10 +37,16 @@ async function getApiKey(): Promise<string> {
   return apiKey;
 }
 
+/** Valida as credenciais atuais pedindo uma API Key nova ao Pluggy. */
+export async function testCredentials(): Promise<void> {
+  cachedKey = null;
+  await getApiKey();
+}
+
 async function pluggyGet<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = new URL(path, BASE_URL);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const doFetch = async () => fetch(url, { headers: { 'X-API-KEY': await getApiKey() } });
+  const doFetch = async () => fetch(url.toString(), { headers: { 'X-API-KEY': await getApiKey() } });
   let res = await doFetch();
   if (res.status === 401 || res.status === 403) {
     cachedKey = null;

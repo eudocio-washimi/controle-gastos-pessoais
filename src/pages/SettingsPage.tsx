@@ -1,13 +1,16 @@
-import { Link2, Trash2 } from 'lucide-react';
+import { KeyRound, Link2, LogOut, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Empty } from '../components/ui.tsx';
 import { useApp } from '../context/AppContext.tsx';
-import { api } from '../lib/api.ts';
+import { api, isDevice, logout, saveDeviceCredentials, type Status } from '../lib/api.ts';
 import type { ItemInfo } from '../lib/types.ts';
+
+// Tema e conexão com o Pluggy sobrevivem à limpeza dos dados locais.
+const KEEP_ON_RESET = ['cg:theme', 'cg:token', 'cg:pluggyCredentials', 'cg:pluggyItemIds'];
 
 export default function SettingsPage() {
   const { sync, payload } = useApp();
-  const [status, setStatus] = useState<{ credentials: boolean; items: number; demo: boolean } | null>(null);
+  const [status, setStatus] = useState<Status | null>(null);
   const [items, setItems] = useState<ItemInfo[]>([]);
   const [newId, setNewId] = useState('');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -52,7 +55,7 @@ export default function SettingsPage() {
   const resetLocal = () => {
     if (!confirm('Apagar lançamentos previstos, limites e categorias personalizadas deste dispositivo?')) return;
     try {
-      Object.keys(localStorage).filter((k) => k.startsWith('cg:') && k !== 'cg:theme').forEach((k) => localStorage.removeItem(k));
+      Object.keys(localStorage).filter((k) => k.startsWith('cg:') && !KEEP_ON_RESET.includes(k)).forEach((k) => localStorage.removeItem(k));
     } catch {
       /* sem armazenamento */
     }
@@ -65,7 +68,7 @@ export default function SettingsPage() {
         <div className="card-title">Status da integração com o Pluggy</div>
         {status ? (
           <ul className="mt-3 space-y-1.5 text-sm">
-            <li>Credenciais (PLUGGY_CLIENT_ID / SECRET): <b>{status.credentials ? 'configuradas' : 'não configuradas'}</b></li>
+            <li>Credenciais{isDevice ? '' : ' (PLUGGY_CLIENT_ID / SECRET)'}: <b>{status.credentials ? 'configuradas' : 'não configuradas'}</b></li>
             <li>Conexões bancárias (items): <b>{status.items}</b></li>
             <li>Modo: <b>{status.demo ? 'demonstração (dados fictícios)' : 'dados reais do Pluggy'}</b></li>
           </ul>
@@ -77,12 +80,22 @@ export default function SettingsPage() {
             {payload.errors.map((e) => <div key={e}>{e}</div>)}
           </div>
         ) : null}
-        {status && !status.credentials && (
+        {status && !status.credentials && status.mode === 'server' && (
           <p className="mt-3 text-sm text-[var(--ink-2)]">
-            Para usar seus dados reais, crie um arquivo <code>.env</code> na raiz do projeto com <code>PLUGGY_CLIENT_ID</code> e <code>PLUGGY_CLIENT_SECRET</code> (obtidos em dashboard.pluggy.ai) e reinicie o servidor.
+            Para usar seus dados reais, defina <code>PLUGGY_CLIENT_ID</code> e <code>PLUGGY_CLIENT_SECRET</code> (obtidos em dashboard.pluggy.ai) no arquivo <code>.env</code> (uso local) ou nas variáveis de ambiente da hospedagem, e reinicie o servidor.
           </p>
         )}
       </div>
+
+      {isDevice && (
+        <DeviceCredentials
+          configured={!!status?.credentials}
+          onSaved={async () => {
+            await refresh();
+            await sync();
+          }}
+        />
+      )}
 
       <div className="card">
         <div className="card-title">Conexões bancárias</div>
@@ -110,7 +123,7 @@ export default function SettingsPage() {
                 <div className="truncate font-mono text-xs text-[var(--muted)]">{i.id} · {i.status}</div>
               </div>
               {i.source === 'env' ? (
-                <span className="chip bg-black/5 text-[var(--ink-2)] dark:bg-white/10">via .env</span>
+                <span className="chip bg-black/5 text-[var(--ink-2)] dark:bg-white/10">no servidor</span>
               ) : (
                 <button className="btn-ghost !p-1.5 text-[var(--critical)]" onClick={() => void remove(i.id)} aria-label="Remover">
                   <Trash2 size={16} />
@@ -125,12 +138,83 @@ export default function SettingsPage() {
       <div className="card">
         <div className="card-title">Dados locais</div>
         <p className="card-sub mt-1">
-          Lançamentos previstos, limites, categorias personalizadas e o último sincronismo ficam salvos neste navegador, permitindo usar o app offline.
+          Lançamentos previstos, limites, categorias personalizadas e o último sincronismo ficam salvos {isDevice ? 'neste aparelho' : 'neste navegador'}, permitindo usar o app offline.
         </p>
-        <button className="btn-outline mt-3 text-[var(--critical)]" onClick={resetLocal}>
-          <Trash2 size={16} /> Limpar dados locais
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button className="btn-outline text-[var(--critical)]" onClick={resetLocal}>
+            <Trash2 size={16} /> Limpar dados locais
+          </button>
+          {status?.auth && (
+            <button
+              className="btn-outline"
+              onClick={() => {
+                logout();
+                location.reload();
+              }}
+            >
+              <LogOut size={16} /> Sair
+            </button>
+          )}
+        </div>
       </div>
+    </div>
+  );
+}
+
+function DeviceCredentials({ configured, onSaved }: { configured: boolean; onSaved: () => Promise<void> }) {
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async (creds: { clientId: string; clientSecret: string } | null, ok: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await saveDeviceCredentials(creds);
+      setClientId('');
+      setClientSecret('');
+      setMsg({ ok: true, text: ok });
+      await onSaved();
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="card-title">Credenciais do Pluggy</div>
+      <p className="card-sub mt-1">
+        Obtenha o Client ID e o Client Secret em dashboard.pluggy.ai. Eles ficam guardados só neste aparelho e são usados para falar direto com o Pluggy.
+      </p>
+      <form
+        className="mt-3 flex flex-col gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run({ clientId: clientId.trim(), clientSecret: clientSecret.trim() }, 'Credenciais válidas e salvas.');
+        }}
+      >
+        <input className="input font-mono" placeholder="Client ID" autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} />
+        <input className="input font-mono" placeholder="Client Secret" type="password" autoComplete="off" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} />
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-primary" disabled={busy || !clientId.trim() || !clientSecret.trim()}>
+            <KeyRound size={16} /> {configured ? 'Trocar credenciais' : 'Salvar'}
+          </button>
+          {configured && (
+            <button
+              type="button"
+              className="btn-outline text-[var(--critical)]"
+              disabled={busy}
+              onClick={() => confirm('Apagar as credenciais deste aparelho? O app volta ao modo demonstração.') && void run(null, 'Credenciais apagadas.')}
+            >
+              <Trash2 size={16} /> Apagar
+            </button>
+          )}
+        </div>
+      </form>
+      {msg && <p className={`mt-2 text-sm ${msg.ok ? 'text-[var(--good-text)]' : 'text-[var(--critical)]'}`}>{msg.text}</p>}
     </div>
   );
 }

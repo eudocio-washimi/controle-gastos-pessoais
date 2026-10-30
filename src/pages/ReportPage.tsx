@@ -1,7 +1,9 @@
-import { Check, Copy, Download, Sparkles } from 'lucide-react';
+import { Share } from '@capacitor/share';
+import { Check, Copy, Download, Share2, Sparkles } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { MonthPicker } from '../components/ui.tsx';
 import { useApp } from '../context/AppContext.tsx';
+import { isDevice } from '../lib/api.ts';
 import { AI_PROMPT, buildReport } from '../lib/report.ts';
 
 export default function ReportPage() {
@@ -34,6 +36,9 @@ export default function ReportPage() {
     URL.revokeObjectURL(a.href);
   };
 
+  // No Android não há download de arquivo pelo WebView: abre a folha de compartilhamento (ex.: direto para o app da IA).
+  const share = () => Share.share({ title: `Relatório financeiro ${month}`, text: report }).catch(() => {});
+
   return (
     <div className="space-y-4">
       <div className="card">
@@ -51,9 +56,15 @@ export default function ReportPage() {
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
           <MonthPicker />
           <div className="flex gap-2">
-            <button className="btn-outline" onClick={download}>
-              <Download size={16} /> Baixar .txt
-            </button>
+            {isDevice ? (
+              <button className="btn-outline" onClick={() => void share()}>
+                <Share2 size={16} /> Compartilhar
+              </button>
+            ) : (
+              <button className="btn-outline" onClick={download}>
+                <Download size={16} /> Baixar .txt
+              </button>
+            )}
             <button className="btn-primary" onClick={copy}>
               {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? 'Copiado!' : 'Copiar'}
             </button>
