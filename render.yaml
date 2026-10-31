@@ -20,3 +20,6 @@ services:
         sync: false
       - key: PLUGGY_ITEM_IDS
         sync: false
+      # Postgres gratuito do Neon onde ficam os cadastros compartilhados entre os aparelhos (veja o README).
+      - key: DATABASE_URL
+        sync: false

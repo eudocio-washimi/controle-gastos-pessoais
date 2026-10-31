@@ -5,6 +5,7 @@ import {
 } from '../lib/calc.ts';
 import { OTHER_COLOR, OTHERS_KEY, SERIES_DARK, SERIES_LIGHT, type CategoryKey } from '../lib/categories.ts';
 import { addDaysISO, addMonthsISO, addMonthsYM, currentMonth, lastMonths, monthOf, todayISO } from '../lib/dates.ts';
+import { startCloud, syncCloud, type CloudState } from '../lib/cloud.ts';
 import { load, save, uid } from '../lib/storage.ts';
 import type { CategoryLimits, Occurrence, OccurrenceOverride, PlannedEntry, SyncPayload, Tx } from '../lib/types.ts';
 
@@ -16,6 +17,8 @@ interface AppState {
   /** O servidor pede senha: o app mostra a tela de login. */
   needsLogin: boolean;
   sync: () => Promise<void>;
+  /** Sincronização dos cadastros entre aparelhos (pelo banco de dados do servidor). */
+  cloud: CloudState;
   txs: Tx[];
   cards: CardInfo[];
   planned: PlannedEntry[];
@@ -67,6 +70,9 @@ const isDemoEntry = (e: PlannedEntry) => DEMO_SIGNATURES.has(`${e.description}|$
  */
 const RESYNC_MS = 60 * 60 * 1000;
 
+/** Tempo máximo esperando os cadastros do servidor antes de buscar os dados do Pluggy (o Render gratuito demora a acordar). */
+const CLOUD_WAIT_MS = 8000;
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [payload, setPayload] = useState<SyncPayload | null>(() => load<SyncPayload | null>('payload', null));
   const [loading, setLoading] = useState(false);
@@ -80,6 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [month, setMonth] = useState(currentMonth);
   const [hidden, setHidden] = useState(() => load('hidden', false));
   const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
+  const [cloud, setCloud] = useState<CloudState>({ status: 'off', at: null });
 
   useEffect(() => save('planned', planned), [planned]);
   useEffect(() => save('overrides', overrides), [overrides]);
@@ -95,6 +102,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [dark]);
 
+  // Cadastros que chegaram do servidor (feitos em outro aparelho) substituem os deste aparelho.
+  useEffect(
+    () =>
+      startCloud({
+        onState: setCloud,
+        onApplied: (keys) => {
+          if (keys.includes('planned')) setPlanned(load<PlannedEntry[]>('planned', []));
+          if (keys.includes('overrides')) setOverrides(load('overrides', {}));
+          if (keys.includes('limits')) setLimits(load('limits', {}));
+          if (keys.includes('categoryOverrides')) setCatOverrides(load('categoryOverrides', {}));
+        },
+        // Os exemplos do modo demonstração não vão para o servidor.
+        clean: (key, value) => {
+          if (key === 'planned' && Array.isArray(value)) return (value as PlannedEntry[]).filter((e) => !isDemoEntry(e));
+          if (key === 'limits' && value && typeof value === 'object') {
+            const next = { ...(value as CategoryLimits) };
+            for (const [k, v] of Object.entries(DEMO_LIMITS)) if (next[k as CategoryKey] === v) delete next[k as CategoryKey];
+            return next;
+          }
+          return value;
+        },
+      }),
+    [],
+  );
+
   const lastSync = useRef(0);
 
   const sync = useCallback(async () => {
@@ -102,12 +134,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setError(null);
     lastSync.current = Date.now();
     try {
+      // Primeiro os cadastros (trazem também as conexões bancárias cadastradas em outro aparelho).
+      await Promise.race([syncCloud(), new Promise((r) => setTimeout(r, CLOUD_WAIT_MS))]);
       const data = await api.sync();
       setPayload(data);
       setOffline(false);
       setNeedsLogin(false);
       save('payload', data);
-      if (data.demo && !load('demoSeeded', false)) {
+      // Com os cadastros no servidor, os exemplos da demonstração não são criados (iriam para os outros aparelhos).
+      if (data.demo && !load('demoSeeded', false) && !load('cloudMigrated', false)) {
         save('demoSeeded', true);
         setPlanned((p) => (p.length ? p : demoPlanned()));
         setLimits((l) => (Object.keys(l).length ? l : DEMO_LIMITS));
@@ -179,6 +214,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     offline,
     needsLogin,
     sync,
+    cloud,
     txs,
     cards,
     planned,

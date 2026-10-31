@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { ItemInfo } from '../shared/types.ts';
 import { buildDemoData } from '../shared/demo.ts';
 import { getItem, hasCredentials, setPluggyCredentials, syncFromPluggy } from '../shared/pluggy.ts';
+import { hasDatabase, mergeSettings, type SettingEntries } from './settings.ts';
 
 setPluggyCredentials({ clientId: process.env.PLUGGY_CLIENT_ID ?? '', clientSecret: process.env.PLUGGY_CLIENT_SECRET ?? '' });
 
@@ -50,7 +51,7 @@ const failures = new Map<string, { count: number; resetAt: number }>();
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Verificação de saúde da hospedagem (sem dados, fora da senha).
 app.get('/healthz', (_req, res) => {
@@ -112,6 +113,20 @@ app.get('/api/download/android', (_req, res) => {
   res.download(apkFile, 'meus-gastos.apk', { headers: { 'Content-Type': 'application/vnd.android.package-archive' } });
 });
 
+/**
+ * Cadastros compartilhados entre os aparelhos: recebe as chaves do aparelho (vence a alteração mais recente de cada
+ * chave) e devolve todas as guardadas no banco. Sem DATABASE_URL, cada aparelho fica só com os próprios cadastros.
+ */
+app.post('/api/settings', async (req, res) => {
+  if (!hasDatabase()) return res.json({ enabled: false, entries: {} });
+  try {
+    res.json({ enabled: true, entries: await mergeSettings((req.body?.entries ?? {}) as SettingEntries) });
+  } catch (e) {
+    console.error('Erro no banco de dados:', e);
+    res.status(502).json({ error: `Banco de dados indisponível: ${(e as Error).message}` });
+  }
+});
+
 /** Confere se o item existe no Pluggy; quem guarda a lista é o app. */
 app.post('/api/items/validate', async (req, res) => {
   const id = String(req.body?.id ?? '').trim();
@@ -135,5 +150,5 @@ if (fs.existsSync(dist)) {
 // PORT é definida pelas hospedagens (Render etc.); API_PORT é a configuração local.
 const port = Number(process.env.PORT ?? process.env.API_PORT ?? 3001);
 app.listen(port, () => {
-  console.log(`API em http://localhost:${port} — ${hasCredentials() ? 'credenciais do Pluggy configuradas' : 'modo DEMONSTRAÇÃO'}${PASSWORD ? ', protegida por senha' : ''}`);
+  console.log(`API em http://localhost:${port} — ${hasCredentials() ? 'credenciais do Pluggy configuradas' : 'modo DEMONSTRAÇÃO'}${PASSWORD ? ', protegida por senha' : ''}${hasDatabase() ? ', cadastros no banco de dados' : ''}`);
 });

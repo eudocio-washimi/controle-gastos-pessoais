@@ -25,9 +25,15 @@ export class AuthError extends Error {}
 // Nos dois modos a lista de items (conexões bancárias) adicionados pelo app fica salva aqui.
 const loadItemIds = () => load<string[]>('pluggyItemIds', []);
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Endereço do servidor. No navegador é o próprio site; no Android é o servidor (Render) configurado em
+ * Configurações, usado só para os cadastros compartilhados — o Pluggy continua sendo chamado direto do aparelho.
+ */
+export const serverUrl = () => (isDevice ? load<string>('serverUrl', '') : '');
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = load<string | null>('token', null);
-  const res = await fetch(path, {
+  const res = await fetch(serverUrl() + path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
@@ -80,6 +86,28 @@ export async function downloadAndroidApk() {
 
 export function logout() {
   save('token', null);
+}
+
+/** Só no app Android: liga o aparelho ao servidor que guarda os cadastros (`null` desliga). */
+export async function connectServer(url: string | null, password = '') {
+  if (!url) {
+    save('serverUrl', '');
+    save('token', null);
+    return;
+  }
+  let base = url.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
+  const previous = { url: load<string>('serverUrl', ''), token: load<string | null>('token', null) };
+  save('serverUrl', base);
+  try {
+    await login(password);
+    const s = await request<{ auth?: unknown }>('/api/status');
+    if (typeof s.auth !== 'boolean') throw new Error('Esse endereço não é o servidor do Meus Gastos.');
+  } catch (e) {
+    save('serverUrl', previous.url);
+    save('token', previous.token);
+    throw e instanceof TypeError ? new Error(`Servidor não encontrado em ${base}.`) : e;
+  }
 }
 
 // --- Modo aparelho (Android) ---
