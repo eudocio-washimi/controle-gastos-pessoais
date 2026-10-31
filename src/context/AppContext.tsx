@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, AuthError } from '../lib/api.ts';
 import {
   buildOccurrences, cardInfo, categorySlots, creditAccounts, enrich, forecast, slotKey, type CardInfo, type Forecast,
@@ -61,6 +61,12 @@ const DEMO_LIMITS: CategoryLimits = { alimentacao: 1000, transporte: 1100, lazer
 const DEMO_SIGNATURES = new Set(demoPlanned().map((e) => `${e.description}|${e.amount}`));
 const isDemoEntry = (e: PlannedEntry) => DEMO_SIGNATURES.has(`${e.description}|${e.amount}`);
 
+/**
+ * Com o app aberto, sincroniza a cada hora. O Pluggy coleta os dados no banco uma vez por dia (itens do MeuPluggy
+ * não aceitam coleta sob demanda); assim a coleta diária aparece no app em até 1 hora, sem precisar reabri-lo.
+ */
+const RESYNC_MS = 60 * 60 * 1000;
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [payload, setPayload] = useState<SyncPayload | null>(() => load<SyncPayload | null>('payload', null));
   const [loading, setLoading] = useState(false);
@@ -89,9 +95,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [dark]);
 
+  const lastSync = useRef(0);
+
   const sync = useCallback(async () => {
     setLoading(true);
     setError(null);
+    lastSync.current = Date.now();
     try {
       const data = await api.sync();
       setPayload(data);
@@ -125,9 +134,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Sincroniza ao abrir o app.
+  // Sincroniza ao abrir o app e, com ele aberto, a cada hora (também ao voltar para o app depois de 1 hora).
   useEffect(() => {
     void sync();
+    const timer = setInterval(() => void sync(), RESYNC_MS);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastSync.current >= RESYNC_MS) void sync();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [sync]);
 
   const txs = useMemo(() => (payload ? enrich(payload, catOverrides) : []), [payload, catOverrides]);
