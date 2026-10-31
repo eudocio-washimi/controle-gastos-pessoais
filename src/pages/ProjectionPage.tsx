@@ -38,7 +38,7 @@ export default function ProjectionPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="card-title">Projeção mês a mês</div>
-            <p className="card-sub mt-1">Cada mês mostra só os valores dele: as faturas que vencem no mês, as receitas e as despesas previstas.</p>
+            <p className="card-sub mt-1">Cada mês mostra o que você paga nele: a fatura de cada cartão, os gastos recorrentes cadastrados e quanto sobra do salário.</p>
           </div>
           <label className="flex cursor-pointer select-none items-center gap-2 text-sm font-medium">
             <input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={estimates} onChange={toggle} />
@@ -128,10 +128,10 @@ function MonthSummary({ m }: { m: ProjectionMonth }) {
             </div>
           )}
         </Tile>
-        <Tile label="Outras saídas" hint={m.variable > 0 ? 'Previstas + débito/Pix' : 'Despesas previstas'}>
+        <Tile label="Gastos recorrentes" hint={m.variable > 0 ? 'Cadastrados + débito/Pix' : 'Cadastrados em Planejamento'}>
           <Money value={m.fixed + m.variable} />
         </Tile>
-        <Tile label="Sobra do mês" hint="Receitas − todas as saídas">
+        <Tile label="Sobra do salário" hint="Receitas − faturas − recorrentes">
           <Money value={m.leftover} signed className={m.leftover < 0 ? 'text-[var(--critical)]' : 'text-[var(--good-text)]'} />
         </Tile>
       </div>
@@ -147,13 +147,13 @@ function MonthSummary({ m }: { m: ProjectionMonth }) {
   );
 }
 
-/** Faturas que vencem no mês escolhido, com os lançamentos de cada uma. */
+/** Faturas pagas no mês escolhido, com os lançamentos de cada uma. */
 function BillsOfMonth({ p, month, estimates }: { p: Projection; month: string; estimates: boolean }) {
   if (!p.cards.length) return <Empty>Nenhum cartão de crédito vinculado.</Empty>;
   return (
     <div className="card">
       <div className="card-title">Faturas de {monthLabelLong(month)}</div>
-      <div className="card-sub">Só o que é cobrado nas faturas deste mês. Toque num cartão para ver os lançamentos.</div>
+      <div className="card-sub">A fatura de cada cartão a pagar neste mês. Toque num cartão para ver os lançamentos.</div>
       <div className="mt-2 divide-y divide-black/5 dark:divide-white/10">
         {p.cards.map((o) => (
           <BillRow key={`${o.card.account.id}-${month}`} o={o} c={o.byMonth[month]} estimates={estimates} />
@@ -221,7 +221,7 @@ function PlannedOfMonth({ m, estimates }: { m: ProjectionMonth; estimates: boole
   const items = [...m.occurrences].sort((a, b) => a.date.localeCompare(b.date));
   return (
     <div className="card">
-      <div className="card-title">Receitas e despesas de {monthLabelLong(m.month)}</div>
+      <div className="card-title">Receitas e gastos recorrentes de {monthLabelLong(m.month)}</div>
       <div className="card-sub">
         Cadastradas em <a href="#/planejamento" className="underline">Planejamento</a>
       </div>

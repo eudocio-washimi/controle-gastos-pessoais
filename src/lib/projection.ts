@@ -92,14 +92,39 @@ export interface Projection {
   remainingInstallments: number;
 }
 
-/** Mês da fatura de um lançamento: o informado pelo banco ou, se faltar, deduzido do ciclo do cartão. */
-function billMonthOf(t: Tx, card: CardInfo): string {
-  if (t.billMonth) return t.billMonth;
+/**
+ * Mês em que a fatura de um lançamento é paga: o informado pelo banco (ajustado por `shift`) ou,
+ * se faltar, deduzido do ciclo do cartão.
+ */
+function billMonthOf(t: Tx, card: CardInfo, shift: number): string {
+  if (t.billMonth) return addMonthsYM(t.billMonth, shift);
   const closeDay = Number(card.nextClose.slice(8, 10));
   const offset = Math.max(1, diffDays(card.open.dueDate, card.nextClose));
   const base = Number(t.date.slice(8, 10)) <= closeDay ? monthOf(t.date) : addMonthsYM(monthOf(t.date), 1);
   const close = `${base}-${String(Math.min(closeDay, daysInMonth(base))).padStart(2, '0')}`;
   return monthOf(addDaysISO(close, offset));
+}
+
+/**
+ * Em que mês, relativo ao mês informado pelo banco, a fatura costuma ser paga: 0 ou -1.
+ * O banco informa o mês do vencimento; quando ele cai no comecinho do mês (Nubank vencendo dia 1º, por exemplo),
+ * a fatura é paga no fim do mês anterior, com o salário daquele mês. Deduzido dos pagamentos das últimas faturas fechadas.
+ */
+function payShift(all: Tx[], today: string): number {
+  const payments = all.filter((t) => t.category === 'pagamento_fatura' && t.kind === 'income');
+  const closes = new Map<string, string>();
+  for (const t of all)
+    if (t.billMonth && !t.installment && t.kind === 'expense' && t.category !== 'pagamento_fatura' && t.date <= today)
+      if ((closes.get(t.billMonth) ?? '') < t.date) closes.set(t.billMonth, t.date);
+  const votes: number[] = [];
+  for (const [bm, close] of [...closes].sort((a, b) => b[0].localeCompare(a[0])).slice(1, 4)) {
+    // Maior pagamento até 25 dias depois da última compra da fatura.
+    const pay = payments
+      .filter((p) => p.date >= close && diffDays(p.date, close) <= 25)
+      .sort((a, b) => b.amount - a.amount)[0];
+    if (pay) votes.push(monthOf(pay.date) < bm ? -1 : 0);
+  }
+  return votes.length && votes.filter((v) => v === -1).length > votes.length / 2 ? -1 : 0;
 }
 
 /** "LOJA X 3/10" → "LOJA X" */
@@ -110,7 +135,32 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const ym = currentMonth();
   const id = card.account.id;
   const all = txs.filter((t) => t.accountId === id);
-  const items = all.filter((t) => t.category !== 'pagamento_fatura');
+  const shift = payShift(all, today);
+
+  // Compra parcelada estornada: o banco devolve a parcela já cobrada, mas o Pluggy continua mandando as seguintes.
+  // Estorno do valor de uma parcela já cobrada cancela a compra: as parcelas posteriores a ele não são cobradas.
+  const refunds = all.filter((t) => t.kind === 'income' && t.category !== 'pagamento_fatura' && !t.installment);
+  const refundOf = (t: Tx): Tx | undefined => {
+    const inst = t.installment;
+    if (!inst?.purchaseDate) return undefined;
+    return refunds.find(
+      (r) =>
+        r.date >= inst.purchaseDate! &&
+        all.some(
+          (p) =>
+            p.installment?.purchaseDate === inst.purchaseDate &&
+            p.installment.total === inst.total &&
+            p.date <= r.date &&
+            Math.abs(p.amount - r.amount) < 0.01 &&
+            Math.abs(p.amount - t.amount) <= p.amount * 0.01,
+        ),
+    );
+  };
+  const items = all.filter((t) => {
+    if (t.category === 'pagamento_fatura') return false;
+    const r = refundOf(t);
+    return !r || t.date <= r.date;
+  });
 
   const buckets = new Map<string, { installments: number; purchases: number; items: BillItem[] }>();
   const bucket = (m: string) => buckets.get(m) ?? buckets.set(m, { installments: 0, purchases: 0, items: [] }).get(m)!;
@@ -119,7 +169,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   // Parcelas agrupadas por compra; as que o banco ainda não informou são deduzidas a partir da última conhecida.
   // O banco às vezes encurta o nome da loja entre uma parcela e outra ("SHOPEE *lacrista" / "SHOPEE *lacristacomerc"):
   // mesma data de compra e mesmo número de parcelas, com um nome começando pelo outro, é a mesma compra.
-  type Group = { description: string; total: number; parts: Map<number, { month: string; amount: number }> };
+  type Group = { description: string; total: number; refunded: boolean; parts: Map<number, { month: string; amount: number }> };
   const groups = new Map<string, Group>();
   const groupFor = (desc: string, purchaseDate: string | null, total: number): Group => {
     const norm = desc.toLowerCase();
@@ -130,10 +180,10 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
       }
     }
     const key = `${purchaseDate ?? ''}|${total}|${desc}`;
-    return groups.get(key) ?? groups.set(key, { description: desc, total, parts: new Map() }).get(key)!;
+    return groups.get(key) ?? groups.set(key, { description: desc, total, refunded: false, parts: new Map() }).get(key)!;
   };
   for (const t of items) {
-    const m = billMonthOf(t, card);
+    const m = billMonthOf(t, card, shift);
     bucket(m).items.push({
       description: t.description,
       amount: value(t),
@@ -145,6 +195,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
       bucket(m).installments += value(t);
       const g = groupFor(baseDescription(t.description), t.installment.purchaseDate, t.installment.total);
       g.parts.set(t.installment.number, { month: m, amount: t.amount });
+      if (refundOf(t)) g.refunded = true;
     } else {
       bucket(m).purchases += value(t);
     }
@@ -164,7 +215,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
     const last = numbers[numbers.length - 1];
     const lastPart = g.parts.get(last)!;
     let projected = false;
-    for (let k = last + 1; k <= g.total; k++) {
+    for (let k = last + 1; !g.refunded && k <= g.total; k++) {
       const m = addMonthsYM(lastPart.month, k - last);
       // Garantia contra duplicar: a fatura já tem esta parcela (mesmo número e valor) vinda do banco.
       const known = bucket(m).items.some(
@@ -202,7 +253,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const recent = items
     .filter((t) => !t.installment && t.kind === 'expense' && t.date <= today && diffDays(today, t.date) <= 40)
     .sort((a, b) => b.date.localeCompare(a.date))[0];
-  const openMonth = recent ? billMonthOf(recent, card) : billMonthOf({ date: today } as Tx, card);
+  const openMonth = recent ? billMonthOf(recent, card, shift) : billMonthOf({ date: today } as Tx, card, shift);
   const avgPurchases = round2(sum(lastMonths(addMonthsYM(openMonth, -1), 3).map((m) => Math.max(0, buckets.get(m)?.purchases ?? 0))) / 3);
 
   const months = [...buckets.keys()].filter((m) => m >= ym);
