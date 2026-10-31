@@ -120,12 +120,25 @@ function rollForward(iso: string, minISO: string) {
   return d;
 }
 
+/**
+ * Fechamento mais recente deduzido dos lançamentos, para cartões que não informam a data (ex.: Nubank pelo MeuPluggy):
+ * o dia da última compra à vista da fatura anterior à que recebe as compras de hoje.
+ */
+function inferredClose(cardTxs: Tx[], today: string): string | null {
+  const purchases = cardTxs
+    .filter((t) => t.billMonth && !t.installment && t.kind === 'expense' && t.category !== 'pagamento_fatura' && t.date <= today)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (!purchases.length) return null;
+  const previous = addMonthsYM(purchases[0].billMonth!, -1);
+  return purchases.find((t) => t.billMonth === previous)?.date ?? null;
+}
+
 export function cardInfo(account: Account, txs: Tx[], bills: Bill[]): CardInfo {
   const today = todayISO();
   const cd = account.creditData;
   const cardTxs = txs.filter((t) => t.accountId === account.id);
 
-  const nextClose = rollForward(cd?.balanceCloseDate ?? lastDayOfMonth(monthOf(today)), today);
+  const nextClose = rollForward(cd?.balanceCloseDate ?? inferredClose(cardTxs, today) ?? lastDayOfMonth(monthOf(today)), today);
   const prevClose = addMonthsISO(nextClose, -1);
   const prevPrevClose = addMonthsISO(prevClose, -1);
 
@@ -145,8 +158,10 @@ export function cardInfo(account: Account, txs: Tx[], bills: Bill[]): CardInfo {
     .filter((b) => b.accountId === account.id && b.dueDate > prevClose)
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
 
+  // Vencimento: o dia informado pelo banco, no mês seguinte ao fechamento; sem ele, alguns dias depois do fechamento.
+  const openDue = cd?.balanceDueDate ? rollForward(cd.balanceDueDate, addDaysISO(nextClose, 1)) : addDaysISO(nextClose, dueOffset);
   const closedAmount = bill?.totalAmount ?? invoiceTotal(closedTxs);
-  const closedDue = bill?.dueDate ?? addDaysISO(prevClose, dueOffset);
+  const closedDue = bill?.dueDate ?? (cd?.balanceDueDate ? addMonthsISO(openDue, -1) : addDaysISO(prevClose, dueOffset));
   const paidSoFar = sum(cardTxs.filter((t) => t.category === 'pagamento_fatura' && t.kind === 'income' && t.date > prevClose).map((t) => t.amount));
   const paid = closedAmount <= 0 || paidSoFar >= closedAmount * 0.99;
   const overdue = !paid && closedDue < today;
@@ -163,7 +178,7 @@ export function cardInfo(account: Account, txs: Tx[], bills: Bill[]): CardInfo {
     usedPct: limit > 0 ? Math.min(1, used / limit) : 0,
     nextClose,
     prevClose,
-    open: { amount: invoiceTotal(openTxs), dueDate: addDaysISO(nextClose, dueOffset), txs: openTxs },
+    open: { amount: invoiceTotal(openTxs), dueDate: openDue, txs: openTxs },
     closed: { amount: closedAmount, dueDate: closedDue, txs: closedTxs, paid, overdue, bill },
   };
 }

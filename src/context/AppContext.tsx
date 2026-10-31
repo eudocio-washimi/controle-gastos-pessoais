@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, AuthError } from '../lib/api.ts';
+import { withBills } from '../lib/projection.ts';
 import {
   buildOccurrences, cardInfo, categorySlots, creditAccounts, enrich, forecast, slotKey, type CardInfo, type Forecast,
 } from '../lib/calc.ts';
@@ -185,7 +186,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const txs = useMemo(() => (payload ? enrich(payload, catOverrides) : []), [payload, catOverrides]);
   const cards = useMemo(
-    () => (payload ? creditAccounts(payload.accounts).map((a) => cardInfo(a, txs, payload.bills)) : []),
+    () => (payload ? creditAccounts(payload.accounts).map((a) => withBills(cardInfo(a, txs, payload.bills), txs)) : []),
     [payload, txs],
   );
 

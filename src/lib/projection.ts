@@ -22,6 +22,8 @@ export interface BillItem {
   installment: { number: number; total: number } | null;
   /** Parcela que o banco ainda não informou, deduzida pelo app. */
   projected: boolean;
+  /** Lançamento de origem; nas parcelas deduzidas, uma cópia da última parcela conhecida. */
+  tx: Tx;
 }
 
 export interface CardMonth {
@@ -57,6 +59,8 @@ export interface CardOutlook {
   card: CardInfo;
   /** Fatura que está recebendo as compras de hoje. */
   openMonth: string;
+  /** Meses entre o vencimento informado pelo banco e o mês em que a fatura é paga (0 ou -1). */
+  shift: number;
   /** Média mensal de compras à vista (últimas 3 faturas fechadas). */
   avgPurchases: number;
   byMonth: Record<string, CardMonth>;
@@ -130,7 +134,7 @@ function payShift(all: Tx[], today: string): number {
 /** "LOJA X 3/10" → "LOJA X" */
 const baseDescription = (d: string) => d.replace(/\s*\d{1,2}\s*\/\s*\d{1,2}\s*$/, '').trim();
 
-function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
+export function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const today = todayISO();
   const ym = currentMonth();
   const id = card.account.id;
@@ -169,7 +173,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   // Parcelas agrupadas por compra; as que o banco ainda não informou são deduzidas a partir da última conhecida.
   // O banco às vezes encurta o nome da loja entre uma parcela e outra ("SHOPEE *lacrista" / "SHOPEE *lacristacomerc"):
   // mesma data de compra e mesmo número de parcelas, com um nome começando pelo outro, é a mesma compra.
-  type Group = { description: string; total: number; refunded: boolean; parts: Map<number, { month: string; amount: number }> };
+  type Group = { description: string; total: number; refunded: boolean; parts: Map<number, { month: string; amount: number; tx: Tx }> };
   const groups = new Map<string, Group>();
   const groupFor = (desc: string, purchaseDate: string | null, total: number): Group => {
     const norm = desc.toLowerCase();
@@ -190,11 +194,12 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
       date: t.date,
       installment: t.installment ? { number: t.installment.number, total: t.installment.total } : null,
       projected: false,
+      tx: t,
     });
     if (t.installment) {
       bucket(m).installments += value(t);
       const g = groupFor(baseDescription(t.description), t.installment.purchaseDate, t.installment.total);
-      g.parts.set(t.installment.number, { month: m, amount: t.amount });
+      g.parts.set(t.installment.number, { month: m, amount: t.amount, tx: t });
       if (refundOf(t)) g.refunded = true;
     } else {
       bucket(m).purchases += value(t);
@@ -222,15 +227,18 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
         (it) => !it.projected && it.installment?.number === k && it.installment.total === g.total && Math.abs(it.amount - lastPart.amount) < 0.01,
       );
       if (known) continue;
-      g.parts.set(k, { month: m, amount: lastPart.amount });
-      bucket(m).installments += lastPart.amount;
-      bucket(m).items.push({
-        description: `${g.description} ${k}/${g.total}`,
-        amount: lastPart.amount,
+      const description = `${g.description} ${k}/${g.total}`;
+      const tx: Tx = {
+        ...lastPart.tx,
+        id: `deduzida:${lastPart.tx.id}:${k}`,
+        description,
         date: `${m}-01`,
-        installment: { number: k, total: g.total },
-        projected: true,
-      });
+        billMonth: null,
+        installment: lastPart.tx.installment && { ...lastPart.tx.installment, number: k },
+      };
+      g.parts.set(k, { month: m, amount: lastPart.amount, tx });
+      bucket(m).installments += lastPart.amount;
+      bucket(m).items.push({ description, amount: lastPart.amount, date: `${m}-01`, installment: { number: k, total: g.total }, projected: true, tx });
       projected = true;
     }
     const pending = [...g.parts.entries()].filter(([, p]) => p.month >= firstOpen).sort((a, b) => a[0] - b[0]);
@@ -259,7 +267,7 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   const months = [...buckets.keys()].filter((m) => m >= ym);
   const byMonth: Record<string, CardMonth> = {};
   const end = maxMonth(months.sort().at(-1) ?? null, addMonthsYM(ym, MAX_HORIZON))!;
-  for (let m = ym; m <= end; m = addMonthsYM(m, 1)) {
+  for (let m = addMonthsYM(ym, -1); m <= end; m = addMonthsYM(m, 1)) {
     const b = buckets.get(m) ?? { installments: 0, purchases: 0, items: [] };
     const installments = round2(b.installments);
     const purchases = round2(b.purchases);
@@ -282,12 +290,38 @@ function cardOutlook(card: CardInfo, txs: Tx[]): CardOutlook {
   return {
     card,
     openMonth,
+    shift,
     avgPurchases,
     byMonth,
     plans,
     remainingInstallments: round2(sum(futureInstallments.map(([, c]) => c.installments))),
     lastInstallmentMonth,
     zeroFrom,
+  };
+}
+
+/**
+ * Fatura aberta e fechada do cartão com os mesmos lançamentos da projeção: sem as parcelas de compras estornadas
+ * e com as parcelas que o banco ainda não informou.
+ */
+export function withBills(card: CardInfo, txs: Tx[]): CardInfo {
+  const o = cardOutlook(card, txs);
+  const billOf = (due: string) => o.byMonth[addMonthsYM(monthOf(due), o.shift)];
+  const open = billOf(card.open.dueDate);
+  const closed = billOf(card.closed.dueDate);
+  if (!open || !closed) return card;
+  const amount = (c: CardMonth) => round2(c.installments + c.purchases);
+  const closedAmount = card.closed.bill?.totalAmount ?? amount(closed);
+  const paidSoFar = sum(
+    txs
+      .filter((t) => t.accountId === card.account.id && t.category === 'pagamento_fatura' && t.kind === 'income' && t.date > card.prevClose)
+      .map((t) => t.amount),
+  );
+  const paid = closedAmount <= 0 || paidSoFar >= closedAmount * 0.99;
+  return {
+    ...card,
+    open: { ...card.open, amount: amount(open), txs: open.items.map((i) => i.tx) },
+    closed: { ...card.closed, amount: closedAmount, txs: closed.items.map((i) => i.tx), paid, overdue: !paid && card.closed.dueDate < todayISO() },
   };
 }
 
